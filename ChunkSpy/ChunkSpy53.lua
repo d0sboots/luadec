@@ -1758,6 +1758,95 @@ function ChunkSpy(chunk_name, chunk)
     end
 
     -------------------------------------------------------------
+    -- helper for making formatted, column-aligned output
+    -- * first argument is a string.format string, used for all output
+    -- * Width in format specifiers is *max* width. The function will attempt
+    --   to fit all output within that width and calculate a new smaller width
+    --   that fits the data. Anything larger will simply overflow. If the
+    --   width is not specified, it is taken as 0, which means everything
+    --   overflows! (I.e. no alignment)
+    -------------------------------------------------------------
+    local function CreateAlignedFormatFns(fmt)
+      local adj_fmts = {}
+      local limit = {}
+      local maxes = {}
+      local acc = {}
+      local aPos = 1
+      local numargs = 0
+      -- Match a format specifier like %-30.23f, capture width in the middle
+      local fmt_pat = "(%%[-+ #0]*)([0-9]*)(%.?[0-9]*[A-Za-z])"
+      local format = string.format
+
+      -----------------------------------------------------------
+      -- requires data input that matches the format specifiers of the parent
+      -- in type and count, and buffers its input to calculate widths
+      -----------------------------------------------------------
+      local function WriteAligned(...)
+        local args = {...}
+        for i = 1, numargs do
+          local arg = args[i]
+          local size = #format(adj_fmts[i], arg)
+          if size <= limit[i] and size > maxes[i] then
+            maxes[i] = size
+          end
+          acc[aPos] = arg
+          aPos = aPos + 1
+        end
+      end
+
+      -----------------------------------------------------------
+      -- writes the aligned results
+      -----------------------------------------------------------
+      local function Flush()
+        local unpack = table.unpack
+        local i = 0
+        local final_fmt = string.gsub(fmt, fmt_pat, function(flags, width, rest)
+          i = i + 1
+          if width == "" then return false end  -- No width, no change
+          return flags..maxes[i]..rest
+        end)
+        for i = 1, aPos - 1, numargs do
+          WriteLine(format(final_fmt, unpack(acc, i, i + numargs - 1)))
+        end
+      end
+
+      -----------------------------------------------------------
+      -- body of CreateBriefAlignedFns()
+      -----------------------------------------------------------
+      for flags, width, rest in string.gmatch(fmt, fmt_pat) do
+        numargs = numargs + 1
+        if width == "" then
+          limit[numargs] = 0
+        else
+          limit[numargs] = math.tointeger(width) or
+              error('Format string "'..fmt..'" at index '..numargs..' has a bad width')
+        end
+        maxes[numargs] = 0
+        -- Reconstruct fmt without the width
+        adj_fmts[numargs] = flags..rest
+      end
+
+      return WriteAligned, Flush
+    end
+
+    -------------------------------------------------------------
+    -- wrapper to only apply writing to brief output modes
+    -------------------------------------------------------------
+    local function CreateBriefAlignedFns(fmt)
+      if config.DISPLAY_INDENT then
+        fmt = string.rep(config.DISPLAY_SEP, level - 1)..fmt
+      end
+      local BriefAligned, BriefFlush = CreateAlignedFormatFns(fmt)
+
+      -- Call the function first, so that we validate args
+      if not config.DISPLAY_FLAG or not config.DISPLAY_BRIEF then
+        local function Noop() end
+        return Noop, Noop
+      end
+      return BriefAligned, BriefFlush
+    end
+
+    -------------------------------------------------------------
     -- describe a string (size, data pairs)
     -- changed for lua 5.3
     -- s = { val=nil, len=0, islngstr=nil }, { val="", len=1, islngstr=nil }, { val="ab", len=3, islngstr=nil }
@@ -1814,6 +1903,9 @@ function ChunkSpy(chunk_name, chunk)
     -- describe locals information
     -------------------------------------------------------------
     local function DescLocals()
+      local BriefAligned, BriefFlush = CreateBriefAlignedFns(
+          ".local"..config.DISPLAY_SEP.."%-60s"..config.DISPLAY_SEP
+          ..config.DISPLAY_COMMENT.."%10d"..config.DISPLAY_SEP.."%10d-%d")
       local n = func.sizelocvars
       DescLine("* locals:")
       FormatLine(config.size_int, "sizelocvars ("..n..")", func.pos_locvars)
@@ -1823,27 +1915,30 @@ function ChunkSpy(chunk_name, chunk)
         DescLine("local ["..(i - 1).."]: "..EscapeString(locvar.varname))
         FormatLine(config.size_int, "  startpc ("..locvar.startpc..")", locvar.pos_startpc)
         FormatLine(config.size_int, "  endpc   ("..locvar.endpc..")",locvar.pos_endpc)
-        BriefLine(".local"..config.DISPLAY_SEP..EscapeString(locvar.varname, 1)
-                  ..config.DISPLAY_SEP..config.DISPLAY_COMMENT..(i - 1)
-                  ..config.DISPLAY_SEP..locvar.startpc.."-"..locvar.endpc)
+        BriefAligned(EscapeString(locvar.varname, 1), i - 1, locvar.startpc, locvar.endpc)
       end
+      BriefFlush()
     end
 
     -------------------------------------------------------------
     -- describe upvalues information
     -------------------------------------------------------------
     local function DescUpvaluesAll()
+      local BriefAligned, BriefFlush = CreateBriefAlignedFns(
+          ".upvalue"..config.DISPLAY_SEP.."%-60s"
+                    ..config.DISPLAY_SEP.."%10d"
+                    ..config.DISPLAY_SEP.."%10d"
+                    ..config.DISPLAY_SEP..config.DISPLAY_COMMENT.."%10d"
+                    ..config.DISPLAY_SEP.."instack=%10d"
+                    ..config.DISPLAY_SEP.."idx=%10d")
       local n = func.sizeupvalues
       for i = 1, n do
         local upvalue = func.upvalues[i]
         local name = upvalue.name or ''
-        BriefLine(".upvalue"..config.DISPLAY_SEP..EscapeString(name, 1)
-                  ..config.DISPLAY_SEP..tostring(upvalue.instack)
-                  ..config.DISPLAY_SEP..tostring(upvalue.idx)
-                  ..config.DISPLAY_SEP..config.DISPLAY_COMMENT..(i - 1)
-                  ..config.DISPLAY_SEP.."instack="..tostring(upvalue.instack)
-                  ..config.DISPLAY_SEP.."idx="..tostring(upvalue.idx))
+        BriefAligned(EscapeString(name, 1), upvalue.instack, upvalue.idx,
+                     i - 1, upvalue.instack, upvalue.idx)
       end
+      BriefFlush()
     end
 
     -------------------------------------------------------------
@@ -1880,6 +1975,9 @@ function ChunkSpy(chunk_name, chunk)
     -- describe constants information (data)
     -------------------------------------------------------------
     local function DescConstants()
+      local BriefAligned, BriefFlush = CreateBriefAlignedFns(
+          ".const"..config.DISPLAY_SEP.."%-60s"..config.DISPLAY_SEP
+          ..config.DISPLAY_COMMENT.."%10d")
       local n = func.sizek
       local pos = func.pos_ks
       DescLine("* constants:")
@@ -1887,29 +1985,28 @@ function ChunkSpy(chunk_name, chunk)
       for i = 1, n do
         local posk = func.posk[i]
         local CONST = "const ["..(i - 1).."]: "
-        local CONSTB = config.DISPLAY_SEP..config.DISPLAY_COMMENT..(i - 1)
         local k = func.k[i]
         local typek = func.typek[i]
         local typestrk = config.typestr[typek]
+        local briefarg = k
         FormatLine(1, "const type "..typestrk, posk)
         if typek == config.LUA_TNUMFLT then
           FormatLine(config.size_lua_Number, CONST.."("..k..")", posk + 1)
-          BriefLine(".const"..config.DISPLAY_SEP..k..CONSTB)
         elseif typek == config.LUA_TNUMINT then
           FormatLine(config.size_lua_Integer, CONST.."("..k..")", posk + 1)
-          BriefLine(".const"..config.DISPLAY_SEP..k..CONSTB)
         elseif typek == config.LUA_TBOOLEAN then
           FormatLine(1, CONST.."("..tostring(k)..")", posk + 1)
-          BriefLine(".const"..config.DISPLAY_SEP..tostring(k)..CONSTB)
         elseif typek == config.LUA_TSHRSTR or typek == config.LUA_TLNGSTR then
           DescString(k, posk + 1)
           DescLine(CONST..EscapeString(k.val, 1))
-          BriefLine(".const"..config.DISPLAY_SEP..EscapeString(k.val, 1)..CONSTB)
+          briefarg = EscapeString(k.val, 1)
         elseif typek == config.LUA_TNIL then
           DescLine(CONST.."nil")
-          BriefLine(".const"..config.DISPLAY_SEP.."nil"..CONSTB)
+          briefarg = nil
         end
+        BriefAligned(briefarg, i - 1)
       end--for
+      BriefFlush()
     end
 
     -------------------------------------------------------------
