@@ -1,4 +1,4 @@
-#!/usr/bin/env lua
+--#!/usr/bin/env lua
 --[[-------------------------------------------------------------------
 
   ChunkSpy.lua
@@ -798,8 +798,10 @@ function DescribeInst(inst, pos, func)
   -- R(x)
   ---------------------------------------------------------------
   local function RName(index)
-    -- can we get local vaname using index and pos ?
-    -- func.locals[?].varname .startpc .endpc
+    local locl = func.stack[index + 1]
+    if locl ~= nil then
+      return EscapeString(locl.varname)
+    end
     return nil
   end
   local function R(index)
@@ -2024,6 +2026,35 @@ function ChunkSpy(chunk_name, chunk)
     end
 
     -------------------------------------------------------------
+    -- Adjust local variable stack given we are on 'instr'
+    -------------------------------------------------------------
+    local function AdjustStack(instr)
+      -- PC values in ChunkSpy are one-based, but the ranges in startpc/endpc
+      -- are zero-based. Subtract one to rectify this.
+      instr = instr - 1
+      local stack = func.stack
+      local stacksize = #stack
+      -- Remove locals that are no longer in scope
+      while stacksize > 0 do
+        local locl = stack[stacksize]
+        if locl.endpc > instr then break end  -- Still in scope
+        stack[stacksize] = nil
+        stacksize = stacksize - 1
+      end
+      -- Add locals that are newly in scope
+      local locvars = func.locvars
+      local nextlocal = func.nextlocal
+      while nextlocal <= func.sizelocvars do
+        local locl = locvars[nextlocal]
+        if locl.startpc > instr then break end  -- Not in scope yet
+        stacksize = stacksize + 1
+        stack[stacksize] = locl
+        nextlocal = nextlocal + 1
+      end
+      func.nextlocal = nextlocal
+    end
+
+    -------------------------------------------------------------
     -- describe function code
     -- * inst decode subfunctions: DecodeInst() and DescribeInst()
     -------------------------------------------------------------
@@ -2038,7 +2069,10 @@ function ChunkSpy(chunk_name, chunk)
       for i = 1, size do
         func.inst[i] = {}
       end
+      func.stack = {}  -- To track the local variables as they enter/leave scope
+      func.nextlocal = 1
       for i = 1, size do
+        AdjustStack(i)
         DecodeInst(func.code[i], func.inst[i])
         local inst = func.inst[i]
         -- compose instruction: opcode operands [; comments]
