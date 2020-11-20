@@ -790,8 +790,15 @@ function DescribeInst(inst, pos, func)
       return "nil"
     end
   end
-  local function K(index)
-    return "K"..tostring(index).."(="..Kst(index, true)..")"
+  local K
+  if config.DISPLAY_BRIEF then
+    K = function(index)
+      return Kst(index, true)
+    end
+  else
+    K = function(index)
+      return "K"..tostring(index).."(="..Kst(index, true)..")"
+    end
   end
 
   ---------------------------------------------------------------
@@ -807,7 +814,11 @@ function DescribeInst(inst, pos, func)
   local function R(index)
     local name = RName(index)
     if name and name ~= "" then
-      return "R"..tostring(index).."(="..name..")"
+      if config.DISPLAY_BRIEF then
+        return name
+      else
+        return "R"..tostring(index).."(="..name..")"
+      end
     else
       return "R"..tostring(index)
     end
@@ -838,7 +849,11 @@ function DescribeInst(inst, pos, func)
   local function U(x)
     local name = UName(x)
     if name and name ~= "" then
-      return 'U'..tostring(x).."(="..name..")"
+      if config.DISPLAY_BRIEF then
+        return name
+      else
+        return 'U'..tostring(x).."(="..name..")"
+      end
     else
       return 'U'..tostring(x)
     end
