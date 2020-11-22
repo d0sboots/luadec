@@ -1032,8 +1032,12 @@ function DescribeInst(inst, pos, func)
          isop("TAILCALL") then -- TAILCALL A B C
     Operand = OperandABC(inst)
     CommentArg = RList(a+1,b-1)
-    CommentRtn = RList(a,c-1)
-    Comment = string.format("%s := %s(%s)",CommentRtn,R(a),CommentArg);
+    if c ~= 1 then
+      CommentRtn = RList(a,c-1)
+      Comment = string.format("%s := %s(%s)",CommentRtn,R(a),CommentArg)
+    else
+      Comment = string.format("%s(%s)",R(a),CommentArg)
+    end
   ---------------------------------------------------------------
   elseif isop("RETURN") then -- RETURN A B
     Operand = OperandAB(inst)
